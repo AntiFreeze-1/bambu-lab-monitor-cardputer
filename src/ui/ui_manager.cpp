@@ -133,7 +133,6 @@ void UIManager::handleKeyboard() {
         return;
     }
     if (_keyHandled) return;
-    _keyHandled = true;
 
     auto& ks = M5Cardputer.Keyboard.keysState();
     bool  fn  = ks.fn;
@@ -150,15 +149,21 @@ void UIManager::handleKeyboard() {
         if (hid == 0x4F) arrowRight = true;
     }
 
-    // Tab navigation: left/right arrows or fn+j/l, or comma/period without fn
-    if (arrowLeft || (!fn && !ks.word.empty() && ks.word[0] == ',')) {
+    // Only consume the event if there's actual content (not just a modifier press)
+    bool hasContent = !ks.word.empty() || ks.enter || ks.del || ks.tab || ks.space
+                      || arrowUp || arrowDown || arrowLeft || arrowRight;
+    if (!hasContent) return;
+    _keyHandled = true;
+
+    // Tab navigation: left/right arrows or fn+comma/period
+    if (arrowLeft || (fn && !ks.word.empty() && ks.word[0] == ',')) {
         int next = ((int)_screen - 1 + TAB_COUNT) % TAB_COUNT;
         setScreen((Screen)next);
         _tabDirty = true;
         _dirty    = true;
         return;
     }
-    if (arrowRight || (!fn && !ks.word.empty() && ks.word[0] == '.')) {
+    if (arrowRight || (fn && !ks.word.empty() && ks.word[0] == '.')) {
         int next = ((int)_screen + 1) % TAB_COUNT;
         setScreen((Screen)next);
         _tabDirty = true;
