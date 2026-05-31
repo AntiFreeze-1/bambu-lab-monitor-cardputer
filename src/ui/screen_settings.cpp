@@ -1,49 +1,84 @@
 #include "screen_settings.h"
 #include "../settings.h"
 #include "../printer_manager.h"
+#include "../utils.h"
 #include "ui_manager.h"
 
-// ── Form field definitions ────────────────────────────────────────────────────
+// ── Field definitions ─────────────────────────────────────────────────────────
+
+enum class FieldType : uint8_t { TEXT, PASSWORD, SPINNER };
 
 struct Field {
     const char* label;
-    char*       buf;
+    char*       buf;          // nullptr for SPINNER
     size_t      maxLen;
-    bool        isPassword;
+    FieldType   type;
+    uint8_t*    spinnerVal;   // nullptr unless SPINNER
+    uint8_t     spinnerMin;
+    uint8_t     spinnerMax;
 };
 
 static AppSettings s_draft;
 static int         s_fieldIdx    = 0;
+static int         s_scrollOff   = 0;
 static uint32_t    s_cursorBlink = 0;
 static bool        s_cursorOn    = true;
 
-static Field fields[10];
+// 3 fixed fields + up to 99*3 per-printer fields
+static Field   fields[3 + PRINTER_COUNT_MAX * 3];
+static int     s_fieldCount = 0;
 
-static void buildFields() {
-    fields[0] = { "WiFi SSID",     s_draft.wifiSsid,           sizeof(s_draft.wifiSsid),           false };
-    fields[1] = { "WiFi Pass",     s_draft.wifiPass,           sizeof(s_draft.wifiPass),           true  };
-    fields[2] = { "P1 Name",       s_draft.printers[0].name,   sizeof(s_draft.printers[0].name),   false };
-    fields[3] = { "P1 IP",         s_draft.printers[0].ip,     sizeof(s_draft.printers[0].ip),     false };
-    fields[4] = { "P1 Serial",     s_draft.printers[0].serial, sizeof(s_draft.printers[0].serial), false };
-    fields[5] = { "P1 Code",       s_draft.printers[0].code,   sizeof(s_draft.printers[0].code),   true  };
-    fields[6] = { "P2 Name",       s_draft.printers[1].name,   sizeof(s_draft.printers[1].name),   false };
-    fields[7] = { "P2 IP",         s_draft.printers[1].ip,     sizeof(s_draft.printers[1].ip),     false };
-    fields[8] = { "P2 Serial",     s_draft.printers[1].serial, sizeof(s_draft.printers[1].serial), false };
-    fields[9] = { "P2 Code",       s_draft.printers[1].code,   sizeof(s_draft.printers[1].code),   true  };
-}
+// Label storage — labels are built dynamically so they must persist
+static char s_ipLabels[PRINTER_COUNT_MAX][12];
+static char s_snLabels[PRINTER_COUNT_MAX][12];
+static char s_cdLabels[PRINTER_COUNT_MAX][12];
 
-static constexpr int FIELD_COUNT   = 10;
 static constexpr int VISIBLE_FIELDS = 6;
 static constexpr int ROW_H          = 15;
-static int           s_scrollOff    = 0;
+
+static void buildFields() {
+    int fi = 0;
+    fields[fi++] = { "WiFi SSID",     s_draft.wifiSsid, sizeof(s_draft.wifiSsid),
+                     FieldType::TEXT,     nullptr, 0, 0 };
+    fields[fi++] = { "WiFi Pass",     s_draft.wifiPass, sizeof(s_draft.wifiPass),
+                     FieldType::PASSWORD, nullptr, 0, 0 };
+    fields[fi++] = { "Printer Count", nullptr, 0,
+                     FieldType::SPINNER,  &s_draft.printerCount, 1, PRINTER_COUNT_MAX };
+
+    for (int i = 0; i < s_draft.printerCount && i < PRINTER_COUNT_MAX; i++) {
+        snprintf(s_ipLabels[i], sizeof(s_ipLabels[i]), "P%d IP",     i + 1);
+        snprintf(s_snLabels[i], sizeof(s_snLabels[i]), "P%d Serial", i + 1);
+        snprintf(s_cdLabels[i], sizeof(s_cdLabels[i]), "P%d Code",   i + 1);
+
+        fields[fi++] = { s_ipLabels[i], s_draft.printers[i].ip,
+                         sizeof(s_draft.printers[i].ip),     FieldType::TEXT,     nullptr, 0, 0 };
+        fields[fi++] = { s_snLabels[i], s_draft.printers[i].serial,
+                         sizeof(s_draft.printers[i].serial), FieldType::TEXT,     nullptr, 0, 0 };
+        fields[fi++] = { s_cdLabels[i], s_draft.printers[i].code,
+                         sizeof(s_draft.printers[i].code),   FieldType::PASSWORD, nullptr, 0, 0 };
+    }
+
+    s_fieldCount = fi;
+
+    // Clamp cursor to valid range after rebuild
+    if (s_fieldIdx >= s_fieldCount) {
+        s_fieldIdx = s_fieldCount - 1;
+        s_scrollOff = max(0, s_fieldIdx - VISIBLE_FIELDS + 1);
+    }
+}
+
+// ── onEnter ───────────────────────────────────────────────────────────────────
 
 void ScreenSettings::onEnter() {
-    // Copy current settings into draft for editing
     memcpy(&s_draft, &Settings::instance().data, sizeof(AppSettings));
+    if (s_draft.printerCount < 1)                  s_draft.printerCount = 1;
+    if (s_draft.printerCount > PRINTER_COUNT_MAX)  s_draft.printerCount = PRINTER_COUNT_MAX;
     buildFields();
     s_fieldIdx  = 0;
     s_scrollOff = 0;
 }
+
+// ── draw ──────────────────────────────────────────────────────────────────────
 
 void ScreenSettings::draw(LGFX_Sprite& s) {
     // Cursor blink
@@ -55,14 +90,12 @@ void ScreenSettings::draw(LGFX_Sprite& s) {
     s.setFont(&fonts::Font0);
     s.setTextColor(TFT_WHITE, TFT_BLACK);
     s.drawString("Settings", 4, 2);
-
-    // Separator
     s.drawFastHLine(0, 11, DISP_W, s.color565(60, 60, 60));
 
     int y = 14;
     for (int i = 0; i < VISIBLE_FIELDS; i++) {
         int fi = s_scrollOff + i;
-        if (fi >= FIELD_COUNT) break;
+        if (fi >= s_fieldCount) break;
 
         const Field& f    = fields[fi];
         bool isActive     = (fi == s_fieldIdx);
@@ -71,107 +104,67 @@ void ScreenSettings::draw(LGFX_Sprite& s) {
 
         s.fillRect(0, y, DISP_W, ROW_H - 1, bg);
 
-        // Label
-        s.setFont(&fonts::Font0);
         s.setTextColor(labelCol, bg);
         s.drawString(f.label, 4, y + 3);
 
-        // Value (or masked password)
-        char display[68];
-        size_t vlen = strlen(f.buf);
-        if (f.isPassword && !isActive) {
-            memset(display, '*', vlen);
-            display[vlen] = '\0';
+        if (f.type == FieldType::SPINNER) {
+            char spinBuf[16];
+            if (isActive)
+                snprintf(spinBuf, sizeof(spinBuf), "< %d >", (int)(*f.spinnerVal));
+            else
+                snprintf(spinBuf, sizeof(spinBuf), "%d", (int)(*f.spinnerVal));
+            s.setTextColor(isActive ? TFT_WHITE : s.color565(180, 180, 180), bg);
+            s.drawString(spinBuf, 80, y + 3);
         } else {
-            strlcpy(display, f.buf, sizeof(display));
-        }
-
-        // Append cursor if active
-        if (isActive && s_cursorOn) {
-            size_t dlen = strlen(display);
-            if (dlen < sizeof(display) - 1) {
-                display[dlen]     = '_';
-                display[dlen + 1] = '\0';
+            // Build display value (mask passwords)
+            char display[68];
+            size_t vlen = strlen(f.buf);
+            if (f.type == FieldType::PASSWORD && !isActive) {
+                memset(display, '*', vlen);
+                display[vlen] = '\0';
+            } else {
+                strlcpy(display, f.buf, sizeof(display));
             }
+            // Append blinking cursor on active text field
+            if (isActive && s_cursorOn) {
+                size_t dlen = strlen(display);
+                if (dlen < sizeof(display) - 1) {
+                    display[dlen]     = '_';
+                    display[dlen + 1] = '\0';
+                }
+            }
+            char truncated[28];
+            truncateFilename(display, truncated, 26);
+            s.setTextColor(isActive ? TFT_WHITE : s.color565(180, 180, 180), bg);
+            s.drawString(truncated, 80, y + 3);
         }
-
-        uint16_t valCol = isActive ? TFT_WHITE : s.color565(180, 180, 180);
-        s.setTextColor(valCol, bg);
-
-        // Truncate display to fit right side
-        char truncated[28];
-        truncateFilename(display, truncated, 26);
-        s.drawString(truncated, 72, y + 3);
 
         y += ROW_H;
     }
 
     // Scroll indicator
-    if (FIELD_COUNT > VISIBLE_FIELDS) {
+    if (s_fieldCount > VISIBLE_FIELDS) {
         int trackH = VISIBLE_FIELDS * ROW_H;
-        int thumbH = max(3, trackH * VISIBLE_FIELDS / FIELD_COUNT);
-        int thumbY = 14 + (trackH - thumbH) * s_scrollOff / (FIELD_COUNT - VISIBLE_FIELDS);
+        int thumbH = max(3, trackH * VISIBLE_FIELDS / s_fieldCount);
+        int thumbY = 14 + (trackH - thumbH) * s_scrollOff / max(1, s_fieldCount - VISIBLE_FIELDS);
         s.fillRect(DISP_W - 3, 14, 2, trackH, s.color565(40, 40, 40));
         s.fillRect(DISP_W - 3, thumbY, 2, thumbH, s.color565(130, 130, 130));
     }
 
-    // Save row at bottom
-    int saveY = 14 + VISIBLE_FIELDS * ROW_H + 2;
+    // Save hint at bottom
     s.setFont(&fonts::Font0);
     s.setTextColor(s.color565(0, 200, 80), TFT_BLACK);
-    s.drawString("[ Enter on last field or press * to save ]", 4, saveY);
+    s.drawString("* = save & reboot", 4, CONTENT_H - 12);
 }
+
+// ── handleKey ─────────────────────────────────────────────────────────────────
 
 void ScreenSettings::handleKey(char c, bool /*fn*/, bool enter, bool /*del*/,
                                 bool tab, bool backspace) {
+    if (s_fieldIdx >= s_fieldCount) return;
     Field& f = fields[s_fieldIdx];
 
-    if (backspace || c == '\x08') {
-        size_t len = strlen(f.buf);
-        if (len > 0) f.buf[len - 1] = '\0';
-        return;
-    }
-
-    // Tab or down arrow = next field
-    if (tab || c == '\x12') {
-        if (s_fieldIdx < FIELD_COUNT - 1) {
-            s_fieldIdx++;
-            if (s_fieldIdx >= s_scrollOff + VISIBLE_FIELDS)
-                s_scrollOff = s_fieldIdx - VISIBLE_FIELDS + 1;
-        } else {
-            // On last field, Tab wraps to first
-            s_fieldIdx  = 0;
-            s_scrollOff = 0;
-        }
-        return;
-    }
-
-    // Up arrow = previous field
-    if (c == '\x11') {
-        if (s_fieldIdx > 0) {
-            s_fieldIdx--;
-            if (s_fieldIdx < s_scrollOff) s_scrollOff = s_fieldIdx;
-        }
-        return;
-    }
-
-    // Enter: advance field, or save on last field
-    if (enter) {
-        if (s_fieldIdx < FIELD_COUNT - 1) {
-            s_fieldIdx++;
-            if (s_fieldIdx >= s_scrollOff + VISIBLE_FIELDS)
-                s_scrollOff = s_fieldIdx - VISIBLE_FIELDS + 1;
-        } else {
-            // Save and restart
-            memcpy(&Settings::instance().data, &s_draft, sizeof(AppSettings));
-            Settings::instance().save();
-            delay(200);
-            ESP.restart();
-        }
-        return;
-    }
-
-    // '*' key = save from any field
+    // Save shortcut: '*' from anywhere
     if (c == '*') {
         memcpy(&Settings::instance().data, &s_draft, sizeof(AppSettings));
         Settings::instance().save();
@@ -180,8 +173,71 @@ void ScreenSettings::handleKey(char c, bool /*fn*/, bool enter, bool /*del*/,
         return;
     }
 
-    // Printable character → append to current field
-    if (c >= 0x20 && c < 0x7F) {
+    // Spinner handling
+    if (f.type == FieldType::SPINNER) {
+        if (c == '+' || c == '=') {
+            if (*f.spinnerVal < f.spinnerMax) {
+                (*f.spinnerVal)++;
+                buildFields();
+            }
+            return;
+        }
+        if (c == '-') {
+            if (*f.spinnerVal > f.spinnerMin) {
+                (*f.spinnerVal)--;
+                buildFields();
+            }
+            return;
+        }
+        // Treat Enter/Tab as field advance on spinner
+    }
+
+    // Text field: backspace
+    if (f.type != FieldType::SPINNER && (backspace || c == '\x08')) {
+        size_t len = strlen(f.buf);
+        if (len > 0) f.buf[len - 1] = '\0';
+        return;
+    }
+
+    // Navigate: Tab or down arrow → next field
+    if (tab || c == '\x12') {
+        if (s_fieldIdx < s_fieldCount - 1) {
+            s_fieldIdx++;
+            if (s_fieldIdx >= s_scrollOff + VISIBLE_FIELDS)
+                s_scrollOff = s_fieldIdx - VISIBLE_FIELDS + 1;
+        } else {
+            s_fieldIdx  = 0;
+            s_scrollOff = 0;
+        }
+        return;
+    }
+
+    // Navigate: up arrow → previous field
+    if (c == '\x11') {
+        if (s_fieldIdx > 0) {
+            s_fieldIdx--;
+            if (s_fieldIdx < s_scrollOff) s_scrollOff = s_fieldIdx;
+        }
+        return;
+    }
+
+    // Enter: advance field, or save on last
+    if (enter) {
+        if (s_fieldIdx < s_fieldCount - 1) {
+            s_fieldIdx++;
+            if (s_fieldIdx >= s_scrollOff + VISIBLE_FIELDS)
+                s_scrollOff = s_fieldIdx - VISIBLE_FIELDS + 1;
+        } else {
+            memcpy(&Settings::instance().data, &s_draft, sizeof(AppSettings));
+            Settings::instance().save();
+            delay(200);
+            ESP.restart();
+        }
+        return;
+    }
+
+    // Printable character → append to text/password field
+    if (f.type != FieldType::SPINNER && c >= 0x20 && c < 0x7F) {
         size_t len = strlen(f.buf);
         if (len < f.maxLen - 1) {
             f.buf[len]     = c;
@@ -191,5 +247,5 @@ void ScreenSettings::handleKey(char c, bool /*fn*/, bool enter, bool /*del*/,
 }
 
 const char* ScreenSettings::hintText() {
-    return "Tab/Enter=next  *=save+reboot";
+    return "Tab/Enter=next  +/-=count  *=save";
 }

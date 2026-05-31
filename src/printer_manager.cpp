@@ -3,6 +3,25 @@
 #include <string.h>
 #include <stdio.h>
 
+static void deriveModelFromSerial(const char* serial, char* out, size_t outLen) {
+    struct { const char* prefix; const char* model; } map[] = {
+        { "01S", "X1 Carbon" },
+        { "01P", "P1S"       },
+        { "00W", "X1E"       },
+        { "00M", "X1"        },
+        { "030", "A1 Mini"   },
+        { "039", "A1"        },
+        { "BL-P","P1P"       },
+    };
+    for (auto& e : map) {
+        if (strncmp(serial, e.prefix, strlen(e.prefix)) == 0) {
+            strlcpy(out, e.model, outLen);
+            return;
+        }
+    }
+    strlcpy(out, "Bambu Printer", outLen);
+}
+
 PrinterManager& PrinterManager::instance() {
     static PrinterManager inst;
     return inst;
@@ -10,31 +29,39 @@ PrinterManager& PrinterManager::instance() {
 
 void PrinterManager::begin() {
     const AppSettings& cfg = Settings::instance().data;
+    uint8_t count = cfg.printerCount;
 
-    for (int i = 0; i < PRINTER_COUNT; i++) {
+    // Clean up any existing clients
+    for (auto* c : _clients) delete c;
+    _clients.clear();
+    _states.clear();
+    _states.resize(count);
+
+    for (int i = 0; i < count; i++) {
         PrinterState& s = _states[i];
         memset(&s, 0, sizeof(s));
 
-        strlcpy(s.name,       cfg.printers[i].name,   sizeof(s.name));
         strlcpy(s.ip,         cfg.printers[i].ip,     sizeof(s.ip));
         strlcpy(s.serial,     cfg.printers[i].serial, sizeof(s.serial));
         strlcpy(s.accessCode, cfg.printers[i].code,   sizeof(s.accessCode));
 
-        // Heuristic: first printer is AMS, second is AMS Lite by default.
-        // User can override by editing config or extending settings.
-        s.hasAms     = (i == 0);
-        s.hasAmsLite = (i == 1);
+        // Seed deviceModel from serial prefix; MQTT get_version may refine it
+        deriveModelFromSerial(s.serial, s.deviceModel, sizeof(s.deviceModel));
+
+        s.hasAms     = false;  // determined dynamically from AMS MQTT data
+        s.hasAmsLite = false;
         s.speedLevel = SpeedLevel::NORMAL;
 
-        delete _clients[i];
-        _clients[i] = new BambuMqttClient(&_states[i]);
-        _clients[i]->begin();
+        _clients.push_back(new BambuMqttClient(&_states[i]));
+        _clients.back()->begin();
     }
+
+    if (_activeIdx >= count) _activeIdx = 0;
 }
 
 void PrinterManager::loop() {
-    for (int i = 0; i < PRINTER_COUNT; i++) {
-        if (_clients[i]) _clients[i]->loop();
+    for (auto* c : _clients) {
+        if (c) c->loop();
     }
 }
 
@@ -43,11 +70,11 @@ PrinterState& PrinterManager::activeState() {
 }
 
 PrinterState& PrinterManager::stateAt(uint8_t idx) {
-    return _states[idx < PRINTER_COUNT ? idx : 0];
+    return _states[idx < _states.size() ? idx : 0];
 }
 
 void PrinterManager::setActiveIndex(uint8_t idx) {
-    if (idx < PRINTER_COUNT) _activeIdx = idx;
+    if (idx < (uint8_t)_states.size()) _activeIdx = idx;
 }
 
 void PrinterManager::sendSpeedCommand(SpeedLevel lvl) {
@@ -55,21 +82,17 @@ void PrinterManager::sendSpeedCommand(SpeedLevel lvl) {
     snprintf(buf, sizeof(buf),
         "{\"print\":{\"sequence_id\":\"0\",\"command\":\"print_speed\",\"param\":\"%d\"}}",
         (int)lvl);
-    if (_clients[_activeIdx]) _clients[_activeIdx]->publish(buf);
+    if (_activeIdx < _clients.size() && _clients[_activeIdx])
+        _clients[_activeIdx]->publish(buf);
 }
 
 void PrinterManager::sendStartPrint(const char* filename) {
-    // Strip any leading path component
     const char* fname = strrchr(filename, '/');
     fname = fname ? fname + 1 : filename;
 
-    // Determine base path based on extension
-    const char* basePath = "/sdcard/";
-
     char url[FTP_FILENAME_LEN + 20];
-    snprintf(url, sizeof(url), "file://%s%s", basePath, fname);
+    snprintf(url, sizeof(url), "file:///sdcard/%s", fname);
 
-    // Build subtask_name without extension
     char subtask[FTP_FILENAME_LEN + 1];
     strlcpy(subtask, fname, sizeof(subtask));
     char* dot = strrchr(subtask, '.');
@@ -89,16 +112,18 @@ void PrinterManager::sendStartPrint(const char* filename) {
         "\"use_ams\":true}}",
         url, subtask);
 
-    if (_clients[_activeIdx]) _clients[_activeIdx]->publish(buf);
+    if (_activeIdx < _clients.size() && _clients[_activeIdx])
+        _clients[_activeIdx]->publish(buf);
 }
 
 void PrinterManager::sendResume() {
     const char* payload = "{\"print\":{\"sequence_id\":\"0\",\"command\":\"resume\"}}";
-    if (_clients[_activeIdx]) _clients[_activeIdx]->publish(payload);
+    if (_activeIdx < _clients.size() && _clients[_activeIdx])
+        _clients[_activeIdx]->publish(payload);
 }
 
 void PrinterManager::refreshFileList(uint8_t printerIdx, void (*loadingCb)()) {
-    if (printerIdx >= PRINTER_COUNT) return;
+    if (printerIdx >= (uint8_t)_states.size()) return;
     PrinterState& s = _states[printerIdx];
 
     if (loadingCb) loadingCb();
@@ -109,7 +134,6 @@ void PrinterManager::refreshFileList(uint8_t printerIdx, void (*loadingCb)()) {
     bool ok = _ftp.listFiles(s.ip, s.accessCode, ftpFiles, ftpCount);
 
     if (ok && ftpCount > 0) {
-        // Replace file list with fresh FTP results
         memset(s.fileList, 0, sizeof(s.fileList));
         s.fileCount = 0;
         for (int i = 0; i < ftpCount && i < FTP_MAX_FILES; i++) {
@@ -117,5 +141,9 @@ void PrinterManager::refreshFileList(uint8_t printerIdx, void (*loadingCb)()) {
         }
         s.fileListFresh = true;
     }
-    // If FTP failed, keep existing MQTT-cached list (fileListFresh remains false)
+}
+
+bool PrinterManager::uploadFileToActive(const char* localSdPath, const char* remoteFilename) {
+    PrinterState& s = activeState();
+    return _ftp.uploadFile(s.ip, s.accessCode, localSdPath, remoteFilename);
 }

@@ -10,7 +10,7 @@ public:
     void begin();
     void loop();
     bool publish(const char* payload);
-    bool connected() const;
+    bool connected();   // non-const: PubSubClient::connected() is not const
 
 private:
     void connect();
@@ -21,7 +21,7 @@ private:
     PubSubClient     _mqtt;
     uint32_t         _lastReconnectMs = 0;
 
-    char _topicSub[72];   // device/{serial}/report
-    char _topicPub[72];   // device/{serial}/request
+    char _topicSub[72];
+    char _topicPub[72];
     char _clientId[40];
 };

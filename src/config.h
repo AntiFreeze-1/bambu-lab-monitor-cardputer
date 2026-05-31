@@ -13,7 +13,7 @@
 #define FTP_FILENAME_LEN    64
 
 // Application
-#define PRINTER_COUNT       2
+#define PRINTER_COUNT_MAX        99
 #define WIFI_CONNECT_TIMEOUT_MS  15000
 #define UI_REFRESH_MS       333     // ~3 fps
 #define LONG_PRESS_MS       800     // long-press threshold

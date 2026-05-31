@@ -1,4 +1,5 @@
 #include "screen_ams.h"
+#include "ui_manager.h"
 #include "../utils.h"
 
 static constexpr int CELL_W  = 56;

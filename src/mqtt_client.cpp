@@ -21,7 +21,6 @@ void BambuMqttClient::begin() {
     snprintf(_topicSub, sizeof(_topicSub), "device/%s/report", _state->serial);
     snprintf(_topicPub, sizeof(_topicPub), "device/%s/request", _state->serial);
 
-    // Use last 8 chars of serial for a unique client ID per printer
     size_t slen = strlen(_state->serial);
     const char* tail = slen >= 8 ? _state->serial + slen - 8 : _state->serial;
     snprintf(_clientId, sizeof(_clientId), "cardputer_%s", tail);
@@ -50,7 +49,7 @@ bool BambuMqttClient::publish(const char* payload) {
     return _mqtt.publish(_topicPub, payload);
 }
 
-bool BambuMqttClient::connected() const {
+bool BambuMqttClient::connected() {
     return _mqtt.connected();
 }
 
@@ -60,6 +59,11 @@ void BambuMqttClient::connect() {
     if (_mqtt.connect(_clientId, MQTT_USER, _state->accessCode)) {
         _mqtt.subscribe(_topicSub);
         _state->mqttConnected = true;
+
+        // Request version info so mqtt_parser can auto-detect device model
+        const char* verReq =
+            "{\"info\":{\"sequence_id\":\"0\",\"command\":\"get_version\"}}";
+        _mqtt.publish(_topicPub, verReq);
     }
 }
 

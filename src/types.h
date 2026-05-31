@@ -30,7 +30,7 @@ enum class SpeedLevel : uint8_t {
 
 struct PrinterState {
     // identity (filled from Settings on boot)
-    char name[32];
+    char deviceModel[32];  // auto-detected from MQTT get_version or serial prefix
     char ip[16];
     char serial[20];
     char accessCode[16];

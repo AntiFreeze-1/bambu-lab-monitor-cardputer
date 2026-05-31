@@ -1,4 +1,5 @@
 #pragma once
+#include <vector>
 #include "types.h"
 #include "mqtt_client.h"
 #include "ftp_client.h"
@@ -12,22 +13,22 @@ public:
 
     PrinterState& activeState();
     PrinterState& stateAt(uint8_t idx);
-    uint8_t       activeIndex() const { return _activeIdx; }
+    uint8_t       activeIndex()  const { return _activeIdx; }
+    uint8_t       printerCount() const { return (uint8_t)_states.size(); }
     void          setActiveIndex(uint8_t idx);
 
     void sendSpeedCommand(SpeedLevel lvl);
     void sendStartPrint(const char* filename);
     void sendResume();
 
-    // Synchronous FTP refresh (shows loading overlay via callback).
-    // Merges FTP results with MQTT-cached currentFile.
     void refreshFileList(uint8_t printerIdx, void (*loadingCb)() = nullptr);
+    bool uploadFileToActive(const char* localSdPath, const char* remoteFilename);
 
 private:
     PrinterManager() = default;
 
-    PrinterState      _states[PRINTER_COUNT];
-    BambuMqttClient*  _clients[PRINTER_COUNT] = {};
-    BambuFtpClient    _ftp;
-    uint8_t           _activeIdx = 0;
+    std::vector<PrinterState>     _states;
+    std::vector<BambuMqttClient*> _clients;
+    BambuFtpClient                _ftp;
+    uint8_t                       _activeIdx = 0;
 };
