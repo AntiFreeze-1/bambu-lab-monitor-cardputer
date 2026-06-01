@@ -2,7 +2,7 @@
 
 // MQTT broker (Bambu printers)
 #define MQTT_PORT           8883
-#define MQTT_BUFFER_SIZE    16384   // Bambu payloads can be 4–8 KB
+#define MQTT_BUFFER_SIZE    32768   // Bambu pushall payloads can be 8–16 KB
 #define MQTT_RECONNECT_MS   10000  // wait between connect attempts (TLS blocks UI)
 #define MQTT_PUSHALL_MS     5000   // periodic pushall interval
 #define MQTT_USER           "bblp"

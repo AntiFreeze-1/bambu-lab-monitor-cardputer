@@ -238,6 +238,6 @@ void ScreenFiles::handleKey(char c, bool /*fn*/, bool enter, bool /*del*/) {
 
 const char* ScreenFiles::hintText() {
     return s_sdMode
-        ? "Up/Dn  Enter=upload+print  s=printer"
-        : "Up/Dn  Enter=print  r=FTP  s=SD card";
+        ? "opt+i/k  Enter=upload+print  s=printer"
+        : "opt+i/k  Enter=print  r=FTP  s=SD card";
 }

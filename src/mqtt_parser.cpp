@@ -30,95 +30,87 @@ static const char* hwVerToModel(const char* hwVer) {
 }
 
 void MqttParser::parse(const byte* data, unsigned int len, PrinterState& state) {
+    // Build filter — use direct subscript assignment (more reliable in ArduinoJson 7)
     JsonDocument filter;
-
-    // Print status fields
-    JsonObject fp = filter["print"].to<JsonObject>();
-    fp["mc_percent"]            = true;
-    fp["mc_remaining_time"]     = true;
-    fp["layer_num"]             = true;
-    fp["total_layer_num"]       = true;
-    fp["nozzle_temper"]         = true;
-    fp["nozzle_target_temper"]  = true;
-    fp["bed_temper"]            = true;
-    fp["bed_target_temper"]     = true;
-    fp["spd_lvl"]               = true;
-    fp["gcode_state"]           = true;
-    fp["gcode_file"]            = true;
-    fp["subtask_name"]          = true;
-    fp["stg_cur"]               = true;
-    fp["ams"]                   = true;
-    fp["vt_tray"]               = true;
-
-    // Version info fields
-    filter["info"]["module"][0]["name"]   = true;
-    filter["info"]["module"][0]["hw_ver"] = true;
+    filter["print"]["mc_percent"]           = true;
+    filter["print"]["mc_remaining_time"]    = true;
+    filter["print"]["layer_num"]            = true;
+    filter["print"]["total_layer_num"]      = true;
+    filter["print"]["nozzle_temper"]        = true;
+    filter["print"]["nozzle_target_temper"] = true;
+    filter["print"]["bed_temper"]           = true;
+    filter["print"]["bed_target_temper"]    = true;
+    filter["print"]["spd_lvl"]              = true;
+    filter["print"]["gcode_state"]          = true;
+    filter["print"]["gcode_file"]           = true;
+    filter["print"]["subtask_name"]         = true;
+    filter["print"]["ams"]                  = true;  // entire nested block
+    filter["print"]["vt_tray"]              = true;
+    // Version info — pass entire info block (it's small)
+    filter["info"]                          = true;
 
     JsonDocument doc;
     DeserializationError err = deserializeJson(
         doc, data, len, DeserializationOption::Filter(filter));
     if (err) return;
 
-    // ── Parse print status ────────────────────────────────────────────────────
+    // ── Print status ─────────────────────────────────────────────────────────
     JsonObject print = doc["print"];
     if (!print.isNull()) {
         if (!print["mc_percent"].isNull())
-            state.progressPct   = print["mc_percent"].as<uint8_t>();
+            state.progressPct  = print["mc_percent"].as<uint8_t>();
         if (!print["mc_remaining_time"].isNull())
-            state.remainingMin  = print["mc_remaining_time"].as<uint16_t>();
+            state.remainingMin = print["mc_remaining_time"].as<uint16_t>();
         if (!print["layer_num"].isNull())
-            state.layerCurrent  = print["layer_num"].as<uint16_t>();
+            state.layerCurrent = print["layer_num"].as<uint16_t>();
         if (!print["total_layer_num"].isNull())
-            state.layerTotal    = print["total_layer_num"].as<uint16_t>();
+            state.layerTotal   = print["total_layer_num"].as<uint16_t>();
         if (!print["nozzle_temper"].isNull())
-            state.nozzleTemp    = print["nozzle_temper"].as<float>();
+            state.nozzleTemp   = print["nozzle_temper"].as<float>();
         if (!print["nozzle_target_temper"].isNull())
-            state.nozzleTarget  = print["nozzle_target_temper"].as<float>();
+            state.nozzleTarget = print["nozzle_target_temper"].as<float>();
         if (!print["bed_temper"].isNull())
-            state.bedTemp       = print["bed_temper"].as<float>();
+            state.bedTemp      = print["bed_temper"].as<float>();
         if (!print["bed_target_temper"].isNull())
-            state.bedTarget     = print["bed_target_temper"].as<float>();
+            state.bedTarget    = print["bed_target_temper"].as<float>();
         if (!print["spd_lvl"].isNull())
-            state.speedLevel    = static_cast<SpeedLevel>(print["spd_lvl"].as<uint8_t>());
+            state.speedLevel   = static_cast<SpeedLevel>(print["spd_lvl"].as<uint8_t>());
         if (!print["gcode_state"].isNull())
-            state.gcodeState    = parseGcodeState(print["gcode_state"]);
+            state.gcodeState   = parseGcodeState(print["gcode_state"]);
 
-        // subtask_name is the human-readable filename; prefer it over gcode_file
-        const char* subtaskName = print["subtask_name"];
-        if (subtaskName && subtaskName[0] != '\0') {
-            strlcpy(state.currentFile, subtaskName, sizeof(state.currentFile));
+        // subtask_name is more human-readable than gcode_file path
+        const char* subtask = print["subtask_name"] | "";
+        if (subtask[0] != '\0') {
+            strlcpy(state.currentFile, subtask, sizeof(state.currentFile));
         } else {
-            const char* gcodeFile = print["gcode_file"];
-            if (gcodeFile && gcodeFile[0] != '\0') {
+            const char* gcodeFile = print["gcode_file"] | "";
+            if (gcodeFile[0] != '\0') {
                 const char* slash = strrchr(gcodeFile, '/');
                 strlcpy(state.currentFile, slash ? slash + 1 : gcodeFile,
                         sizeof(state.currentFile));
             }
         }
 
-        // Add current file to file list cache if not already there
+        // Add current file to file list cache
         if (state.currentFile[0] != '\0') {
             bool found = false;
             for (int i = 0; i < state.fileCount; i++) {
-                if (strcmp(state.fileList[i], state.currentFile) == 0) {
-                    found = true; break;
-                }
+                if (strcmp(state.fileList[i], state.currentFile) == 0) { found = true; break; }
             }
             if (!found && state.fileCount < FTP_MAX_FILES)
-                strlcpy(state.fileList[state.fileCount++], state.currentFile,
-                        FTP_FILENAME_LEN + 1);
+                strlcpy(state.fileList[state.fileCount++], state.currentFile, FTP_FILENAME_LEN + 1);
         }
 
         // ── AMS ──────────────────────────────────────────────────────────────
-        JsonObject amsObj = print["ams"];
-        if (!amsObj.isNull()) {
-            JsonArray amsArr = amsObj["ams"].as<JsonArray>();
+        JsonObject amsTop = print["ams"];
+        if (!amsTop.isNull()) {
+            JsonArray amsArr = amsTop["ams"].as<JsonArray>();
             if (!amsArr.isNull()) {
-                state.amsUnitCount = 0;
+                uint8_t unitIdx = 0;
                 for (JsonObject unit : amsArr) {
-                    if (state.amsUnitCount >= 4) break;
-                    AmsUnit& u  = state.amsUnits[state.amsUnitCount++];
-                    u.present   = true;
+                    if (unitIdx >= 4) break;
+                    AmsUnit& u = state.amsUnits[unitIdx++];
+                    u.present  = true;
                     for (auto& t : u.trays) t.valid = false;
                     uint8_t ti = 0;
                     JsonArray trayArr = unit["tray"].as<JsonArray>();
@@ -128,28 +120,24 @@ void MqttParser::parse(const byte* data, unsigned int len, PrinterState& state) 
                             AmsTray& t = u.trays[ti++];
                             t.valid    = true;
                             t.remain   = tray["remain"].as<uint8_t>();
-                            const char* trayType = tray["tray_type"] | "";
-                            const char* trayName = tray["tray_id_name"];
-                            strlcpy(t.type,
-                                    (trayName && trayName[0]) ? trayName : trayType,
-                                    sizeof(t.type));
+                            const char* tname = tray["tray_id_name"] | "";
+                            const char* ttype = tray["tray_type"] | "";
+                            strlcpy(t.type, tname[0] ? tname : ttype, sizeof(t.type));
                             const char* hex = tray["tray_color"] | "FFFFFFFF";
                             t.color = (uint32_t)strtoul(hex, nullptr, 16) >> 8;
                         }
                     }
                 }
+                if (unitIdx > state.amsUnitCount) state.amsUnitCount = unitIdx;
                 if (state.amsUnitCount > 0) state.hasAms = true;
             }
         }
 
-        // ── External spool (vt_tray) ─────────────────────────────────────────
-        JsonObject vtObj = print["vt_tray"];
-        if (!vtObj.isNull()) {
-            state.hasAmsLite = true;
-        }
+        // ── External spool ───────────────────────────────────────────────────
+        if (!print["vt_tray"].isNull()) state.hasAmsLite = true;
     }
 
-    // ── Parse get_version response ───────────────────────────────────────────
+    // ── Version info (get_version response) ──────────────────────────────────
     JsonObject infoObj = doc["info"];
     if (!infoObj.isNull()) {
         JsonArray modules = infoObj["module"].as<JsonArray>();

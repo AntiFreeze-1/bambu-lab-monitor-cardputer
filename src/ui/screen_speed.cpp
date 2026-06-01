@@ -71,5 +71,5 @@ void ScreenSpeed::handleKey(char c, bool /*fn*/, bool enter, bool /*del*/) {
 }
 
 const char* ScreenSpeed::hintText() {
-    return "1-4 or Up/Dn  Enter=apply";
+    return "1-4 or opt+i/k  Enter=apply";
 }

@@ -74,7 +74,7 @@ void UIManager::loop() {
                 case Screen::FILES:          hint = ScreenFiles::hintText();    break;
                 case Screen::PRINTER_SELECT: hint = ScreenPrinter::hintText();  break;
                 case Screen::SETTINGS:       hint = ScreenSettings::hintText(); break;
-                default: hint = "fn+,. tabs"; break;
+                default: hint = "Tab=next  Shift+Tab=prev"; break;
             }
         }
         drawHintBar(hint ? hint : "");
@@ -127,58 +127,41 @@ void UIManager::dispatchDraw() {
 
 void UIManager::handleKeyboard() {
     if (!M5Cardputer.Keyboard.isChange()) return;
+    if (!M5Cardputer.Keyboard.isPressed()) return;
 
-    if (!M5Cardputer.Keyboard.isPressed()) {
-        _keyHandled = false;
-        return;
-    }
-    if (_keyHandled) return;
-
-    auto& ks = M5Cardputer.Keyboard.keysState();
+    auto& ks  = M5Cardputer.Keyboard.keysState();
     bool  fn  = ks.fn;
+    bool  opt = ks.opt;
 
-    // Arrow keys via HID codes
-    bool arrowUp    = false;
-    bool arrowDown  = false;
-    bool arrowLeft  = false;
-    bool arrowRight = false;
-    for (uint8_t hid : ks.hid_keys) {
-        if (hid == 0x52) arrowUp    = true;
-        if (hid == 0x51) arrowDown  = true;
-        if (hid == 0x50) arrowLeft  = true;
-        if (hid == 0x4F) arrowRight = true;
-    }
-
-    // Only consume the event if there's actual content (not just a modifier press)
-    bool hasContent = !ks.word.empty() || ks.enter || ks.del || ks.tab || ks.space
-                      || arrowUp || arrowDown || arrowLeft || arrowRight;
-    if (!hasContent) return;
-    _keyHandled = true;
-
-    // Tab navigation: left/right arrows or fn+comma/period
-    if (arrowLeft || (fn && !ks.word.empty() && ks.word[0] == ',')) {
-        int next = ((int)_screen - 1 + TAB_COUNT) % TAB_COUNT;
-        setScreen((Screen)next);
-        _tabDirty = true;
-        _dirty    = true;
-        return;
-    }
-    if (arrowRight || (fn && !ks.word.empty() && ks.word[0] == '.')) {
-        int next = ((int)_screen + 1) % TAB_COUNT;
-        setScreen((Screen)next);
-        _tabDirty = true;
-        _dirty    = true;
-        return;
-    }
-
+    // Typed character (library gives value_second when shift/ctrl/capslock held)
     char typed = (!ks.word.empty()) ? ks.word[0] : 0;
 
-    // Map up/down arrows to synthetic chars for screen handlers
-    if (arrowUp)   typed = '\x11'; // DCI1 = up
-    if (arrowDown) typed = '\x12'; // DCI2 = down
+    // Map opt or fn + i/k to synthetic up/down chars.
+    // The ADV keyboard has no HID arrow codes in its ASCII map, so we use
+    // dedicated modifier+letter combos as the reliable navigation method.
+    if ((opt || fn) && typed == 'i') typed = '\x11'; // up
+    if ((opt || fn) && typed == 'k') typed = '\x12'; // down
 
     _dirty = true;
 
+    // Screen/tab navigation — intercept before passing to screen handlers,
+    // except when in Settings where Tab navigates form fields.
+    if (_screen != Screen::SETTINGS) {
+        // Next tab: plain Tab OR fn+period
+        if ((ks.tab && !ks.shift) || (fn && typed == '.')) {
+            setScreen((Screen)(((int)_screen + 1) % TAB_COUNT));
+            _tabDirty = true;
+            return;
+        }
+        // Prev tab: Shift+Tab OR fn+comma
+        if ((ks.tab && ks.shift) || (fn && typed == ',')) {
+            setScreen((Screen)(((int)_screen - 1 + TAB_COUNT) % TAB_COUNT));
+            _tabDirty = true;
+            return;
+        }
+    }
+
+    // Dispatch to the active screen
     if (_screen == Screen::SETTINGS) {
         ScreenSettings::handleKey(typed, fn, ks.enter, ks.del, ks.tab, ks.del);
     } else {

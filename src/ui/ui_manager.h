@@ -47,7 +47,4 @@ private:
 
     char     _hintMsg[48]   = {};
     uint32_t _hintExpiry    = 0;
-
-    // Key repeat suppression
-    bool     _keyHandled    = false;
 };

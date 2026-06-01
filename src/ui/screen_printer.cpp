@@ -126,5 +126,5 @@ void ScreenPrinter::handleKey(char c, bool /*fn*/, bool enter, bool /*del*/) {
 }
 
 const char* ScreenPrinter::hintText() {
-    return "1-9 switch  Up/Dn scroll  Hold Enter=cfg";
+    return "1-9 switch  opt+i/k scroll  Hold Enter=cfg";
 }
