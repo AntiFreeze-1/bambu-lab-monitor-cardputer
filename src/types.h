@@ -62,6 +62,9 @@ struct PrinterState {
     AmsUnit amsUnits[4];
     uint8_t amsUnitCount;
 
+    // chamber light
+    bool chamberLight;   // false = off/unknown, true = on
+
     // file list (FTP + MQTT cache)
     char    fileList[FTP_MAX_FILES][FTP_FILENAME_LEN + 1];
     uint8_t fileCount;

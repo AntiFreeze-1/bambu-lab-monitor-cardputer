@@ -21,7 +21,7 @@ static uint16_t tempColor(float actual, float target, LGFX_Sprite& sp) {
     return sp.color565(220, 60, 60);
 }
 
-void ScreenStatus::draw(LGFX_Sprite& s, const PrinterState& st) {
+void ScreenStatus::draw(LGFX_Sprite& s, PrinterState& st) {
     int y = 4;
     s.setFont(&fonts::Font2);
 
@@ -90,7 +90,7 @@ void ScreenStatus::draw(LGFX_Sprite& s, const PrinterState& st) {
 
     y += 14;
 
-    // ── Row 5: speed + MQTT indicator ────────────────────────────────────────
+    // ── Row 5: speed + light indicator + MQTT indicator ──────────────────────
     s.setTextColor(s.color565(150, 150, 150), TFT_BLACK);
     s.drawString("Spd:", 4, y);
     s.setTextColor(TFT_WHITE, TFT_BLACK);
@@ -98,6 +98,13 @@ void ScreenStatus::draw(LGFX_Sprite& s, const PrinterState& st) {
     snprintf(spdBuf, sizeof(spdBuf), "%s (%s)",
              speedLevelName(st.speedLevel), speedLevelPct(st.speedLevel));
     s.drawString(spdBuf, 32, y);
+
+    // Light indicator: "LT" text dim if off, bright if on
+    uint16_t ltCol = st.chamberLight ? s.color565(255, 230, 80) : s.color565(60, 60, 60);
+    s.setTextColor(ltCol, TFT_BLACK);
+    s.setFont(&fonts::Font0);
+    s.drawString("LT", DISP_W - 22, y + 3);
+    s.setFont(&fonts::Font2);
 
     uint16_t mqttCol = st.mqttConnected ? s.color565(0,200,0) : s.color565(200,50,50);
     s.fillCircle(DISP_W - 8, y + 5, 4, mqttCol);
@@ -113,8 +120,29 @@ void ScreenStatus::draw(LGFX_Sprite& s, const PrinterState& st) {
     }
 }
 
-void ScreenStatus::handleKey(char /*c*/, bool /*fn*/, bool /*enter*/, bool /*del*/) {}
+void ScreenStatus::handleKey(char c, bool /*fn*/, bool /*enter*/, bool /*del*/) {
+    PrinterState& st = PrinterManager::instance().activeState();
+
+    if (c == 'l' || c == 'L') {
+        bool newState = !st.chamberLight;
+        PrinterManager::instance().sendLightCommand(newState);
+        st.chamberLight = newState;
+        UIManager::instance().showHint(newState ? "Light ON" : "Light OFF", 1500);
+        return;
+    }
+
+    if (c == 'p' || c == 'P') {
+        if (st.gcodeState == GcodeState::RUNNING) {
+            PrinterManager::instance().sendPause();
+            UIManager::instance().showHint("Pausing...", 1500);
+        } else if (st.gcodeState == GcodeState::PAUSE) {
+            PrinterManager::instance().sendResume();
+            UIManager::instance().showHint("Resuming...", 1500);
+        }
+        return;
+    }
+}
 
 const char* ScreenStatus::hintText() {
-    return "Tab/S+Tab=tabs  opt+i/k=scroll";
+    return "P=pause  L=light  Tab=next";
 }

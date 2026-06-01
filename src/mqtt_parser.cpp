@@ -46,6 +46,7 @@ void MqttParser::parse(const byte* data, unsigned int len, PrinterState& state) 
     filter["print"]["subtask_name"]         = true;
     filter["print"]["ams"]                  = true;  // entire nested block
     filter["print"]["vt_tray"]              = true;
+    filter["print"]["lights_report"]        = true;
     // Version info — pass entire info block (it's small)
     filter["info"]                          = true;
 
@@ -135,6 +136,19 @@ void MqttParser::parse(const byte* data, unsigned int len, PrinterState& state) 
 
         // ── External spool ───────────────────────────────────────────────────
         if (!print["vt_tray"].isNull()) state.hasAmsLite = true;
+
+        // ── Chamber light ────────────────────────────────────────────────────
+        JsonArray lights = print["lights_report"].as<JsonArray>();
+        if (!lights.isNull()) {
+            for (JsonObject light : lights) {
+                const char* node = light["node"] | "";
+                if (strcmp(node, "chamber_light") == 0) {
+                    const char* mode = light["mode"] | "";
+                    state.chamberLight = (strcmp(mode, "on") == 0);
+                    break;
+                }
+            }
+        }
     }
 
     // ── Version info (get_version response) ──────────────────────────────────

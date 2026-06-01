@@ -34,16 +34,20 @@ public:
 private:
     UIManager() = default;
 
-    void drawTabBar();
-    void drawHintBar(const char* hint);
-    void dispatchDraw();
-    void handleKeyboard();
+    void     drawTabBar();
+    void     drawHintBar(const char* hint);
+    void     dispatchDraw();
+    void     handleKeyboard();
+    uint16_t getThemeColor();
 
     Screen       _screen     = Screen::STATUS;
     LGFX_Sprite* _sprite     = nullptr;
     bool         _dirty      = true;
     bool         _tabDirty   = true;
     uint32_t     _lastDrawMs = 0;
+
+    bool     _screenOn       = true;
+    uint32_t _lastActivityMs = 0;
 
     char     _hintMsg[48]   = {};
     uint32_t _hintExpiry    = 0;

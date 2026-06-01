@@ -122,6 +122,32 @@ void PrinterManager::sendResume() {
         _clients[_activeIdx]->publish(payload);
 }
 
+void PrinterManager::sendPause() {
+    const char* p = "{\"print\":{\"sequence_id\":\"0\",\"command\":\"pause\"}}";
+    if (_activeIdx < _clients.size() && _clients[_activeIdx])
+        _clients[_activeIdx]->publish(p);
+}
+
+void PrinterManager::sendLightCommand(bool on) {
+    char buf[128];
+    snprintf(buf, sizeof(buf),
+        "{\"system\":{\"sequence_id\":\"0\",\"command\":\"led_control\","
+        "\"led_node\":\"chamber_light\",\"led_mode\":\"%s\"}}",
+        on ? "on" : "off");
+    if (_activeIdx < _clients.size() && _clients[_activeIdx])
+        _clients[_activeIdx]->publish(buf);
+}
+
+void PrinterManager::sendSetTemps(int nozzleC, int bedC) {
+    char buf[128];
+    snprintf(buf, sizeof(buf),
+        "{\"print\":{\"sequence_id\":\"0\",\"command\":\"gcode_line\","
+        "\"param\":\"M104 S%d\\nM140 S%d\\n\"}}",
+        nozzleC, bedC);
+    if (_activeIdx < _clients.size() && _clients[_activeIdx])
+        _clients[_activeIdx]->publish(buf);
+}
+
 void PrinterManager::refreshFileList(uint8_t printerIdx, void (*loadingCb)()) {
     if (printerIdx >= (uint8_t)_states.size()) return;
     PrinterState& s = _states[printerIdx];

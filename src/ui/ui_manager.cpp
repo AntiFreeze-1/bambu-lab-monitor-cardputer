@@ -6,13 +6,38 @@
 #include "screen_printer.h"
 #include "screen_settings.h"
 #include "../printer_manager.h"
+#include "../settings.h"
+#include "../utils.h"
 
 // Tab labels (5 chars max to fit 48px width)
-static const char* TAB_LABELS[TAB_COUNT] = { "Stat", "AMS", "Spd", "File", "Prnt" };
+static const char* TAB_LABELS[TAB_COUNT] = { "Stat", "AMS", "Ctrl", "File", "Prnt" };
 
 UIManager& UIManager::instance() {
     static UIManager inst;
     return inst;
+}
+
+// Returns the active theme highlight color as RGB565
+uint16_t UIManager::getThemeColor() {
+    auto& d   = M5Cardputer.Display;
+    uint8_t tc = Settings::instance().data.themeColor;
+    switch (tc) {
+        case 0: return d.color565(0,   120, 200);  // Blue
+        case 1: return d.color565(0,   160,  60);  // Green
+        case 2: return d.color565(120,   0, 180);  // Purple
+        case 3: return d.color565(220, 100,   0);  // Orange
+        case 4: return d.color565(200,  30,  30);  // Red
+        default: {
+            // AMS-based: tc 5..8 → AMS unit 0, tray tc-5
+            uint8_t trayIdx = tc - 5;
+            const PrinterState& st = PrinterManager::instance().activeState();
+            if (st.amsUnitCount > 0 && st.amsUnits[0].present &&
+                trayIdx < 4 && st.amsUnits[0].trays[trayIdx].valid) {
+                return rgb24to565(st.amsUnits[0].trays[trayIdx].color);
+            }
+            return d.color565(0, 120, 200); // fallback Blue
+        }
+    }
 }
 
 void UIManager::begin() {
@@ -21,11 +46,18 @@ void UIManager::begin() {
     _sprite->createSprite(DISP_W, CONTENT_H);
 
     M5Cardputer.Display.setRotation(1);
-    M5Cardputer.Display.setBrightness(150);
+
+    // Apply saved brightness (1–10 → 25–250)
+    uint8_t bright = Settings::instance().data.brightness;
+    if (bright < 1 || bright > 10) bright = 7;
+    M5Cardputer.Display.setBrightness(bright * 25);
+
     M5Cardputer.Display.fillScreen(TFT_BLACK);
 
-    _dirty    = true;
-    _tabDirty = true;
+    _screenOn       = true;
+    _lastActivityMs = millis();
+    _dirty          = true;
+    _tabDirty       = true;
 }
 
 void UIManager::setScreen(Screen s) {
@@ -48,7 +80,30 @@ void UIManager::showHint(const char* msg, uint32_t durationMs) {
 }
 
 void UIManager::loop() {
+    // Check G0 (BtnA) for screen toggle
+    M5.update();
+    if (M5.BtnA.wasPressed()) {
+        _screenOn = !_screenOn;
+        uint8_t bright = Settings::instance().data.brightness;
+        if (bright < 1 || bright > 10) bright = 7;
+        M5Cardputer.Display.setBrightness(_screenOn ? bright * 25 : 0);
+        _lastActivityMs = millis();
+        _dirty = true;
+    }
+
     handleKeyboard();
+
+    // Screen timeout check
+    uint8_t timeoutMin = Settings::instance().data.screenTimeoutMin;
+    if (_screenOn && timeoutMin > 0) {
+        uint32_t now = millis();
+        if (now - _lastActivityMs > (uint32_t)timeoutMin * 60000UL) {
+            _screenOn = false;
+            M5Cardputer.Display.setBrightness(0);
+        }
+    }
+
+    if (!_screenOn) return;
 
     uint32_t now = millis();
     if (_dirty || now - _lastDrawMs >= UI_REFRESH_MS) {
@@ -85,10 +140,12 @@ void UIManager::drawTabBar() {
     auto& d = M5Cardputer.Display;
     d.fillRect(0, 0, DISP_W, TAB_H, d.color565(20, 20, 20));
 
+    uint16_t themeCol = getThemeColor();
+
     for (int i = 0; i < TAB_COUNT; i++) {
         int x = i * TAB_W;
         bool active = ((int)_screen == i);
-        uint16_t bg = active ? d.color565(0, 120, 200) : d.color565(20, 20, 20);
+        uint16_t bg = active ? themeCol : d.color565(20, 20, 20);
         uint16_t fg = TFT_WHITE;
         d.fillRect(x, 0, TAB_W - 1, TAB_H, bg);
         d.setFont(&fonts::Font0);
@@ -137,10 +194,19 @@ void UIManager::handleKeyboard() {
     char typed = (!ks.word.empty()) ? ks.word[0] : 0;
 
     // Map opt or fn + i/k to synthetic up/down chars.
-    // The ADV keyboard has no HID arrow codes in its ASCII map, so we use
-    // dedicated modifier+letter combos as the reliable navigation method.
     if ((opt || fn) && typed == 'i') typed = '\x11'; // up
     if ((opt || fn) && typed == 'k') typed = '\x12'; // down
+
+    // Any key wakes screen and resets activity timer
+    _lastActivityMs = millis();
+    if (!_screenOn) {
+        _screenOn = true;
+        uint8_t bright = Settings::instance().data.brightness;
+        if (bright < 1 || bright > 10) bright = 7;
+        M5Cardputer.Display.setBrightness(bright * 25);
+        _dirty = true;
+        return; // consume the key to just wake, don't act on it
+    }
 
     _dirty = true;
 

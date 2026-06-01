@@ -26,6 +26,12 @@ static bool loadFromSd(AppSettings& d) {
     d.printerCount = doc["printer_count"] | 1;
     if (d.printerCount < 1)                 d.printerCount = 1;
     if (d.printerCount > PRINTER_COUNT_MAX) d.printerCount = PRINTER_COUNT_MAX;
+    d.brightness       = doc["brightness"]      | 7;
+    d.themeColor       = doc["theme_color"]     | 0;
+    d.screenTimeoutMin = doc["screen_timeout"]  | 5;
+    if (d.brightness < 1 || d.brightness > 10) d.brightness = 7;
+    if (d.themeColor > 8)                       d.themeColor = 0;
+    if (d.screenTimeoutMin > 60)                d.screenTimeoutMin = 60;
 
     JsonArray arr = doc["printers"].as<JsonArray>();
     int i = 0;
@@ -44,6 +50,9 @@ static bool saveToSd(const AppSettings& d) {
     doc["wifi_ssid"]      = d.wifiSsid;
     doc["wifi_pass"]      = d.wifiPass;
     doc["printer_count"]  = d.printerCount;
+    doc["brightness"]     = d.brightness;
+    doc["theme_color"]    = d.themeColor;
+    doc["screen_timeout"] = d.screenTimeoutMin;
 
     JsonArray arr = doc["printers"].to<JsonArray>();
     for (int i = 0; i < d.printerCount && i < PRINTER_COUNT_MAX; i++) {
@@ -71,6 +80,12 @@ static void loadFromNvs(AppSettings& d) {
     d.printerCount = prefs.getUChar("p_count", 1);
     if (d.printerCount < 1)                 d.printerCount = 1;
     if (d.printerCount > PRINTER_COUNT_MAX) d.printerCount = PRINTER_COUNT_MAX;
+    d.brightness       = prefs.getUChar("bright",  7);
+    d.themeColor       = prefs.getUChar("theme",   0);
+    d.screenTimeoutMin = prefs.getUChar("scr_off", 5);
+    if (d.brightness < 1 || d.brightness > 10) d.brightness = 7;
+    if (d.themeColor > 8)                       d.themeColor = 0;
+    if (d.screenTimeoutMin > 60)                d.screenTimeoutMin = 60;
 
     for (int i = 0; i < d.printerCount; i++) {
         char key[16];
@@ -92,6 +107,9 @@ static void saveToNvs(const AppSettings& d) {
     prefs.putString("wifi_ssid", d.wifiSsid);
     prefs.putString("wifi_pass", d.wifiPass);
     prefs.putUChar("p_count",   d.printerCount);
+    prefs.putUChar("bright",    d.brightness);
+    prefs.putUChar("theme",     d.themeColor);
+    prefs.putUChar("scr_off",   d.screenTimeoutMin);
 
     for (int i = 0; i < d.printerCount; i++) {
         char key[16];

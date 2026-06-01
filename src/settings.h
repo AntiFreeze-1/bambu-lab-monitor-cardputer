@@ -13,6 +13,9 @@ struct AppSettings {
     char       wifiPass[64];
     uint8_t    printerCount;
     PrinterCfg printers[PRINTER_COUNT_MAX];
+    uint8_t    brightness;       // 1–10 (default 7)
+    uint8_t    themeColor;       // 0–8 (default 0)
+    uint8_t    screenTimeoutMin; // 0=never, 1–60 min (default 5)
 };
 
 class Settings {

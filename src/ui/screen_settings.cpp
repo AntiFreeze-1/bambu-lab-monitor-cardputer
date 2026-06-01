@@ -9,14 +9,15 @@
 enum class FieldType : uint8_t { TEXT, PASSWORD, SPINNER, BUTTON };
 
 struct Field {
-    const char* label;
-    char*       buf;
-    size_t      maxLen;
-    FieldType   type;
-    uint8_t*    spinnerVal;
-    uint8_t     spinnerMin;
-    uint8_t     spinnerMax;
-    uint8_t     buttonId;     // 0=none, 1=import SD, 2=export SD
+    const char*        label;
+    char*              buf;
+    size_t             maxLen;
+    FieldType          type;
+    uint8_t*           spinnerVal;
+    uint8_t            spinnerMin;
+    uint8_t            spinnerMax;
+    uint8_t            buttonId;          // 0=none, 1=import SD, 2=export SD
+    const char* const* spinnerNames;      // nullptr if unused; display names[*spinnerVal]
 };
 
 static AppSettings s_draft;
@@ -25,7 +26,7 @@ static int         s_scrollOff   = 0;
 static uint32_t    s_cursorBlink = 0;
 static bool        s_cursorOn    = true;
 
-static constexpr int MAX_FIELDS = 3 + PRINTER_COUNT_MAX * 3 + 2;
+static constexpr int MAX_FIELDS = 6 + PRINTER_COUNT_MAX * 3 + 2;
 static Field   fields[MAX_FIELDS];
 static int     s_fieldCount = 0;
 
@@ -36,14 +37,44 @@ static char s_cdLabels[PRINTER_COUNT_MAX][12];
 static constexpr int VISIBLE_FIELDS = 6;
 static constexpr int ROW_H          = 15;
 
+// Theme color names
+static const char* const THEME_NAMES[9] = {
+    "Blue", "Green", "Purple", "Orange", "Red",
+    "AMS-1", "AMS-2", "AMS-3", "AMS-4"
+};
+
+// Screen timeout display names (0–60): 0 = "Never", 1–60 = "1m".."60m"
+static char s_scrOffNames[61][8];
+static const char* s_scrOffNamePtrs[61];
+static bool s_scrOffNamesBuilt = false;
+
+static void buildScrOffNames() {
+    if (s_scrOffNamesBuilt) return;
+    snprintf(s_scrOffNames[0], sizeof(s_scrOffNames[0]), "Never");
+    s_scrOffNamePtrs[0] = s_scrOffNames[0];
+    for (int i = 1; i <= 60; i++) {
+        snprintf(s_scrOffNames[i], sizeof(s_scrOffNames[i]), "%dm", i);
+        s_scrOffNamePtrs[i] = s_scrOffNames[i];
+    }
+    s_scrOffNamesBuilt = true;
+}
+
 static void buildFields() {
+    buildScrOffNames();
+
     int fi = 0;
     fields[fi++] = { "WiFi SSID",     s_draft.wifiSsid, sizeof(s_draft.wifiSsid),
-                     FieldType::TEXT,     nullptr, 0, 0, 0 };
+                     FieldType::TEXT,     nullptr, 0, 0, 0, nullptr };
     fields[fi++] = { "WiFi Pass",     s_draft.wifiPass, sizeof(s_draft.wifiPass),
-                     FieldType::PASSWORD, nullptr, 0, 0, 0 };
+                     FieldType::PASSWORD, nullptr, 0, 0, 0, nullptr };
     fields[fi++] = { "Printer Count", nullptr, 0,
-                     FieldType::SPINNER,  &s_draft.printerCount, 1, PRINTER_COUNT_MAX, 0 };
+                     FieldType::SPINNER,  &s_draft.printerCount, 1, PRINTER_COUNT_MAX, 0, nullptr };
+    fields[fi++] = { "Brightness",    nullptr, 0,
+                     FieldType::SPINNER,  &s_draft.brightness, 1, 10, 0, nullptr };
+    fields[fi++] = { "Theme Color",   nullptr, 0,
+                     FieldType::SPINNER,  &s_draft.themeColor, 0, 8, 0, THEME_NAMES };
+    fields[fi++] = { "Scr Off (min)", nullptr, 0,
+                     FieldType::SPINNER,  &s_draft.screenTimeoutMin, 0, 60, 0, s_scrOffNamePtrs };
 
     for (int i = 0; i < s_draft.printerCount && i < PRINTER_COUNT_MAX; i++) {
         snprintf(s_ipLabels[i], sizeof(s_ipLabels[i]), "P%d IP",     i + 1);
@@ -51,16 +82,16 @@ static void buildFields() {
         snprintf(s_cdLabels[i], sizeof(s_cdLabels[i]), "P%d Code",   i + 1);
 
         fields[fi++] = { s_ipLabels[i], s_draft.printers[i].ip,
-                         sizeof(s_draft.printers[i].ip),     FieldType::TEXT,     nullptr, 0, 0, 0 };
+                         sizeof(s_draft.printers[i].ip),     FieldType::TEXT,     nullptr, 0, 0, 0, nullptr };
         fields[fi++] = { s_snLabels[i], s_draft.printers[i].serial,
-                         sizeof(s_draft.printers[i].serial), FieldType::TEXT,     nullptr, 0, 0, 0 };
+                         sizeof(s_draft.printers[i].serial), FieldType::TEXT,     nullptr, 0, 0, 0, nullptr };
         fields[fi++] = { s_cdLabels[i], s_draft.printers[i].code,
-                         sizeof(s_draft.printers[i].code),   FieldType::PASSWORD, nullptr, 0, 0, 0 };
+                         sizeof(s_draft.printers[i].code),   FieldType::PASSWORD, nullptr, 0, 0, 0, nullptr };
     }
 
     // SD card import/export buttons
-    fields[fi++] = { "Import from SD", nullptr, 0, FieldType::BUTTON, nullptr, 0, 0, 1 };
-    fields[fi++] = { "Export to SD",   nullptr, 0, FieldType::BUTTON, nullptr, 0, 0, 2 };
+    fields[fi++] = { "Import from SD", nullptr, 0, FieldType::BUTTON, nullptr, 0, 0, 1, nullptr };
+    fields[fi++] = { "Export to SD",   nullptr, 0, FieldType::BUTTON, nullptr, 0, 0, 2, nullptr };
 
     s_fieldCount = fi;
 
@@ -76,6 +107,9 @@ void ScreenSettings::onEnter() {
     memcpy(&s_draft, &Settings::instance().data, sizeof(AppSettings));
     if (s_draft.printerCount < 1)                  s_draft.printerCount = 1;
     if (s_draft.printerCount > PRINTER_COUNT_MAX)  s_draft.printerCount = PRINTER_COUNT_MAX;
+    if (s_draft.brightness < 1 || s_draft.brightness > 10) s_draft.brightness = 7;
+    if (s_draft.themeColor > 8)                            s_draft.themeColor = 0;
+    if (s_draft.screenTimeoutMin > 60)                     s_draft.screenTimeoutMin = 60;
     buildFields();
     s_fieldIdx  = 0;
     s_scrollOff = 0;
@@ -117,13 +151,21 @@ void ScreenSettings::draw(LGFX_Sprite& s) {
             s.drawString(f.label, 4, y + 3);
 
             if (f.type == FieldType::SPINNER) {
-                char spinBuf[16];
+                char spinBuf[24];
+                const char* valStr = nullptr;
+                char numBuf[8];
+                if (f.spinnerNames) {
+                    valStr = f.spinnerNames[*f.spinnerVal];
+                } else {
+                    snprintf(numBuf, sizeof(numBuf), "%d", (int)(*f.spinnerVal));
+                    valStr = numBuf;
+                }
                 if (isActive)
-                    snprintf(spinBuf, sizeof(spinBuf), "< %d >", (int)(*f.spinnerVal));
+                    snprintf(spinBuf, sizeof(spinBuf), "< %s >", valStr);
                 else
-                    snprintf(spinBuf, sizeof(spinBuf), "%d", (int)(*f.spinnerVal));
+                    snprintf(spinBuf, sizeof(spinBuf), "%s", valStr);
                 s.setTextColor(isActive ? TFT_WHITE : s.color565(180, 180, 180), bg);
-                s.drawString(spinBuf, 80, y + 3);
+                s.drawString(spinBuf, 90, y + 3);
             } else {
                 char display[68];
                 size_t vlen = strlen(f.buf);
@@ -143,7 +185,7 @@ void ScreenSettings::draw(LGFX_Sprite& s) {
                 char truncated[28];
                 truncateFilename(display, truncated, 26);
                 s.setTextColor(isActive ? TFT_WHITE : s.color565(180, 180, 180), bg);
-                s.drawString(truncated, 80, y + 3);
+                s.drawString(truncated, 90, y + 3);
             }
         }
 
@@ -158,10 +200,6 @@ void ScreenSettings::draw(LGFX_Sprite& s) {
         s.fillRect(DISP_W - 3, 14, 2, trackH, s.color565(40, 40, 40));
         s.fillRect(DISP_W - 3, thumbY, 2, thumbH, s.color565(130, 130, 130));
     }
-
-    s.setFont(&fonts::Font0);
-    s.setTextColor(s.color565(0, 200, 80), TFT_BLACK);
-    s.drawString("* = save & reboot", 4, CONTENT_H - 12);
 }
 
 // ── handleKey ─────────────────────────────────────────────────────────────────
@@ -270,5 +308,5 @@ void ScreenSettings::handleKey(char c, bool /*fn*/, bool enter, bool /*del*/,
 }
 
 const char* ScreenSettings::hintText() {
-    return "Tab/Enter=next  +/-=count  *=save";
+    return "Tab/Enter=next  +/-=val  *=save&reboot";
 }

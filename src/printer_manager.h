@@ -20,6 +20,9 @@ public:
     void sendSpeedCommand(SpeedLevel lvl);
     void sendStartPrint(const char* filename);
     void sendResume();
+    void sendPause();
+    void sendLightCommand(bool on);
+    void sendSetTemps(int nozzleC, int bedC);
 
     void refreshFileList(uint8_t printerIdx, void (*loadingCb)() = nullptr);
     bool uploadFileToActive(const char* localSdPath, const char* remoteFilename);
