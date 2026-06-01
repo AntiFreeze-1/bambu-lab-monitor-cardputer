@@ -16,10 +16,13 @@ private:
     void connect();
     void onMessage(char* topic, byte* payload, unsigned int len);
 
+    void sendPushall();
+
     PrinterState*    _state;
     WiFiClientSecure _tls;
     PubSubClient     _mqtt;
     uint32_t         _lastReconnectMs = 0;
+    uint32_t         _lastPushallMs   = 0;
 
     char _topicSub[72];
     char _topicPub[72];

@@ -74,7 +74,7 @@ void UIManager::loop() {
                 case Screen::FILES:          hint = ScreenFiles::hintText();    break;
                 case Screen::PRINTER_SELECT: hint = ScreenPrinter::hintText();  break;
                 case Screen::SETTINGS:       hint = ScreenSettings::hintText(); break;
-                default: hint = "<> tabs"; break;
+                default: hint = "fn+,. tabs"; break;
             }
         }
         drawHintBar(hint ? hint : "");

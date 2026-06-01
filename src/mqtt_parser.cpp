@@ -2,7 +2,7 @@
 #include <ArduinoJson.h>
 
 static GcodeState parseGcodeState(const char* s) {
-    if (!s)                        return GcodeState::UNKNOWN;
+    if (!s) return GcodeState::UNKNOWN;
     if (strcmp(s, "IDLE")    == 0) return GcodeState::IDLE;
     if (strcmp(s, "PREPARE") == 0) return GcodeState::PREPARE;
     if (strcmp(s, "RUNNING") == 0) return GcodeState::RUNNING;
@@ -12,7 +12,6 @@ static GcodeState parseGcodeState(const char* s) {
     return GcodeState::UNKNOWN;
 }
 
-// Map known OTA hw_ver strings to friendly model names
 static const char* hwVerToModel(const char* hwVer) {
     struct { const char* hwv; const char* model; } map[] = {
         { "AP04", "X1 Carbon" },
@@ -46,10 +45,12 @@ void MqttParser::parse(const byte* data, unsigned int len, PrinterState& state) 
     fp["spd_lvl"]               = true;
     fp["gcode_state"]           = true;
     fp["gcode_file"]            = true;
-    fp["device_name"]           = true;  // present on some firmware versions
+    fp["subtask_name"]          = true;
+    fp["stg_cur"]               = true;
     fp["ams"]                   = true;
+    fp["vt_tray"]               = true;
 
-    // Version info fields (response to get_version)
+    // Version info fields
     filter["info"]["module"][0]["name"]   = true;
     filter["info"]["module"][0]["hw_ver"] = true;
 
@@ -82,18 +83,21 @@ void MqttParser::parse(const byte* data, unsigned int len, PrinterState& state) 
         if (!print["gcode_state"].isNull())
             state.gcodeState    = parseGcodeState(print["gcode_state"]);
 
-        // device_name: overrides serial-prefix guess when present
-        const char* devName = print["device_name"];
-        if (devName && devName[0] != '\0')
-            strlcpy(state.deviceModel, devName, sizeof(state.deviceModel));
+        // subtask_name is the human-readable filename; prefer it over gcode_file
+        const char* subtaskName = print["subtask_name"];
+        if (subtaskName && subtaskName[0] != '\0') {
+            strlcpy(state.currentFile, subtaskName, sizeof(state.currentFile));
+        } else {
+            const char* gcodeFile = print["gcode_file"];
+            if (gcodeFile && gcodeFile[0] != '\0') {
+                const char* slash = strrchr(gcodeFile, '/');
+                strlcpy(state.currentFile, slash ? slash + 1 : gcodeFile,
+                        sizeof(state.currentFile));
+            }
+        }
 
-        // Cache filename from current print
-        const char* gcodeFile = print["gcode_file"];
-        if (gcodeFile && gcodeFile[0] != '\0') {
-            const char* slash = strrchr(gcodeFile, '/');
-            strlcpy(state.currentFile, slash ? slash + 1 : gcodeFile,
-                    sizeof(state.currentFile));
-
+        // Add current file to file list cache if not already there
+        if (state.currentFile[0] != '\0') {
             bool found = false;
             for (int i = 0; i < state.fileCount; i++) {
                 if (strcmp(state.fileList[i], state.currentFile) == 0) {
@@ -105,7 +109,7 @@ void MqttParser::parse(const byte* data, unsigned int len, PrinterState& state) 
                         FTP_FILENAME_LEN + 1);
         }
 
-        // AMS
+        // ── AMS ──────────────────────────────────────────────────────────────
         JsonObject amsObj = print["ams"];
         if (!amsObj.isNull()) {
             JsonArray amsArr = amsObj["ams"].as<JsonArray>();
@@ -115,24 +119,37 @@ void MqttParser::parse(const byte* data, unsigned int len, PrinterState& state) 
                     if (state.amsUnitCount >= 4) break;
                     AmsUnit& u  = state.amsUnits[state.amsUnitCount++];
                     u.present   = true;
-                    uint8_t ti  = 0;
                     for (auto& t : u.trays) t.valid = false;
-                    for (JsonObject tray : unit["tray"].as<JsonArray>()) {
-                        if (ti >= 4) break;
-                        AmsTray& t = u.trays[ti++];
-                        t.valid    = true;
-                        t.remain   = tray["remain"].as<uint8_t>();
-                        strlcpy(t.type, tray["tray_type"] | "", sizeof(t.type));
-                        const char* hex = tray["tray_color"] | "FFFFFFFF";
-                        t.color = (uint32_t)strtoul(hex, nullptr, 16) >> 8;
+                    uint8_t ti = 0;
+                    JsonArray trayArr = unit["tray"].as<JsonArray>();
+                    if (!trayArr.isNull()) {
+                        for (JsonObject tray : trayArr) {
+                            if (ti >= 4) break;
+                            AmsTray& t = u.trays[ti++];
+                            t.valid    = true;
+                            t.remain   = tray["remain"].as<uint8_t>();
+                            const char* trayType = tray["tray_type"] | "";
+                            const char* trayName = tray["tray_id_name"];
+                            strlcpy(t.type,
+                                    (trayName && trayName[0]) ? trayName : trayType,
+                                    sizeof(t.type));
+                            const char* hex = tray["tray_color"] | "FFFFFFFF";
+                            t.color = (uint32_t)strtoul(hex, nullptr, 16) >> 8;
+                        }
                     }
                 }
                 if (state.amsUnitCount > 0) state.hasAms = true;
             }
         }
+
+        // ── External spool (vt_tray) ─────────────────────────────────────────
+        JsonObject vtObj = print["vt_tray"];
+        if (!vtObj.isNull()) {
+            state.hasAmsLite = true;
+        }
     }
 
-    // ── Parse get_version response (info.module) ──────────────────────────────
+    // ── Parse get_version response ───────────────────────────────────────────
     JsonObject infoObj = doc["info"];
     if (!infoObj.isNull()) {
         JsonArray modules = infoObj["module"].as<JsonArray>();
@@ -146,7 +163,6 @@ void MqttParser::parse(const byte* data, unsigned int len, PrinterState& state) 
                         strlcpy(state.deviceModel, mapped, sizeof(state.deviceModel));
                     } else if (state.deviceModel[0] == '\0' ||
                                strcmp(state.deviceModel, "Bambu Printer") == 0) {
-                        // Use raw hw_ver as fallback if no friendly name known
                         strlcpy(state.deviceModel, hwVer, sizeof(state.deviceModel));
                     }
                 }

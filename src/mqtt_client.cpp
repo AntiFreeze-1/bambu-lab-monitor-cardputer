@@ -7,12 +7,13 @@ BambuMqttClient::BambuMqttClient(PrinterState* state)
     : _state(state), _mqtt(_tls) {}
 
 void BambuMqttClient::begin() {
-    _tls.setInsecure(); // Bambu uses self-signed cert
+    _tls.setInsecure();
+    _tls.setTimeout(5);  // limit TLS handshake blocking to 5s
 
     _mqtt.setServer(_state->ip, MQTT_PORT);
-    _mqtt.setBufferSize(MQTT_BUFFER_SIZE); // MUST be set before connect()
+    _mqtt.setBufferSize(MQTT_BUFFER_SIZE);
     _mqtt.setKeepAlive(60);
-    _mqtt.setSocketTimeout(10);
+    _mqtt.setSocketTimeout(5);
 
     _mqtt.setCallback([this](char* t, byte* p, unsigned int l) {
         this->onMessage(t, p, l);
@@ -41,7 +42,19 @@ void BambuMqttClient::loop() {
         }
     } else {
         _mqtt.loop();
+
+        // Periodic pushall to keep data fresh
+        uint32_t now = millis();
+        if (now - _lastPushallMs >= MQTT_PUSHALL_MS) {
+            _lastPushallMs = now;
+            sendPushall();
+        }
     }
+}
+
+void BambuMqttClient::sendPushall() {
+    const char* cmd = "{\"pushing\":{\"sequence_id\":\"0\",\"command\":\"pushall\"}}";
+    _mqtt.publish(_topicPub, cmd);
 }
 
 bool BambuMqttClient::publish(const char* payload) {
@@ -60,7 +73,11 @@ void BambuMqttClient::connect() {
         _mqtt.subscribe(_topicSub);
         _state->mqttConnected = true;
 
-        // Request version info so mqtt_parser can auto-detect device model
+        // Request full status dump — this is what makes the printer send data
+        sendPushall();
+        _lastPushallMs = millis();
+
+        // Also request version info for model auto-detection
         const char* verReq =
             "{\"info\":{\"sequence_id\":\"0\",\"command\":\"get_version\"}}";
         _mqtt.publish(_topicPub, verReq);

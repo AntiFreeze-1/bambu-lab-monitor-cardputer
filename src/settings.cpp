@@ -39,7 +39,7 @@ static bool loadFromSd(AppSettings& d) {
     return d.wifiSsid[0] != '\0';
 }
 
-static void saveToSd(const AppSettings& d) {
+static bool saveToSd(const AppSettings& d) {
     JsonDocument doc;
     doc["wifi_ssid"]      = d.wifiSsid;
     doc["wifi_pass"]      = d.wifiPass;
@@ -54,9 +54,10 @@ static void saveToSd(const AppSettings& d) {
     }
 
     File f = SD.open(SD_CONFIG_PATH, FILE_WRITE);
-    if (!f) return;
+    if (!f) return false;
     serializeJson(doc, f);
     f.close();
+    return true;
 }
 
 // ── NVS helpers ───────────────────────────────────────────────────────────────
@@ -109,7 +110,6 @@ static void saveToNvs(const AppSettings& d) {
 
 void Settings::load() {
     loadFromNvs(data);
-    // If NVS has no WiFi SSID, try SD card as fallback
     if (data.wifiSsid[0] == '\0') {
         loadFromSd(data);
     }
@@ -117,9 +117,21 @@ void Settings::load() {
 
 void Settings::save() {
     saveToNvs(data);
-    saveToSd(data);  // also write to SD if available (silently skips if no SD)
+    saveToSd(data);
 }
 
 bool Settings::isConfigured() const {
     return data.wifiSsid[0] != '\0' && data.printers[0].ip[0] != '\0';
+}
+
+bool Settings::importFromSd() {
+    AppSettings tmp;
+    memset(&tmp, 0, sizeof(tmp));
+    if (!loadFromSd(tmp)) return false;
+    memcpy(&data, &tmp, sizeof(AppSettings));
+    return true;
+}
+
+bool Settings::exportToSd() {
+    return saveToSd(data);
 }

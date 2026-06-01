@@ -85,5 +85,5 @@ void ScreenAms::draw(LGFX_Sprite& s, const PrinterState& st) {
 void ScreenAms::handleKey(char /*c*/, bool /*fn*/, bool /*enter*/, bool /*del*/) {}
 
 const char* ScreenAms::hintText() {
-    return ", . tabs";
+    return "fn+,. tabs";
 }

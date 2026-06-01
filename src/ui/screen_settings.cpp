@@ -6,16 +6,17 @@
 
 // ── Field definitions ─────────────────────────────────────────────────────────
 
-enum class FieldType : uint8_t { TEXT, PASSWORD, SPINNER };
+enum class FieldType : uint8_t { TEXT, PASSWORD, SPINNER, BUTTON };
 
 struct Field {
     const char* label;
-    char*       buf;          // nullptr for SPINNER
+    char*       buf;
     size_t      maxLen;
     FieldType   type;
-    uint8_t*    spinnerVal;   // nullptr unless SPINNER
+    uint8_t*    spinnerVal;
     uint8_t     spinnerMin;
     uint8_t     spinnerMax;
+    uint8_t     buttonId;     // 0=none, 1=import SD, 2=export SD
 };
 
 static AppSettings s_draft;
@@ -24,11 +25,10 @@ static int         s_scrollOff   = 0;
 static uint32_t    s_cursorBlink = 0;
 static bool        s_cursorOn    = true;
 
-// 3 fixed fields + up to 99*3 per-printer fields
-static Field   fields[3 + PRINTER_COUNT_MAX * 3];
+static constexpr int MAX_FIELDS = 3 + PRINTER_COUNT_MAX * 3 + 2;
+static Field   fields[MAX_FIELDS];
 static int     s_fieldCount = 0;
 
-// Label storage — labels are built dynamically so they must persist
 static char s_ipLabels[PRINTER_COUNT_MAX][12];
 static char s_snLabels[PRINTER_COUNT_MAX][12];
 static char s_cdLabels[PRINTER_COUNT_MAX][12];
@@ -39,11 +39,11 @@ static constexpr int ROW_H          = 15;
 static void buildFields() {
     int fi = 0;
     fields[fi++] = { "WiFi SSID",     s_draft.wifiSsid, sizeof(s_draft.wifiSsid),
-                     FieldType::TEXT,     nullptr, 0, 0 };
+                     FieldType::TEXT,     nullptr, 0, 0, 0 };
     fields[fi++] = { "WiFi Pass",     s_draft.wifiPass, sizeof(s_draft.wifiPass),
-                     FieldType::PASSWORD, nullptr, 0, 0 };
+                     FieldType::PASSWORD, nullptr, 0, 0, 0 };
     fields[fi++] = { "Printer Count", nullptr, 0,
-                     FieldType::SPINNER,  &s_draft.printerCount, 1, PRINTER_COUNT_MAX };
+                     FieldType::SPINNER,  &s_draft.printerCount, 1, PRINTER_COUNT_MAX, 0 };
 
     for (int i = 0; i < s_draft.printerCount && i < PRINTER_COUNT_MAX; i++) {
         snprintf(s_ipLabels[i], sizeof(s_ipLabels[i]), "P%d IP",     i + 1);
@@ -51,16 +51,19 @@ static void buildFields() {
         snprintf(s_cdLabels[i], sizeof(s_cdLabels[i]), "P%d Code",   i + 1);
 
         fields[fi++] = { s_ipLabels[i], s_draft.printers[i].ip,
-                         sizeof(s_draft.printers[i].ip),     FieldType::TEXT,     nullptr, 0, 0 };
+                         sizeof(s_draft.printers[i].ip),     FieldType::TEXT,     nullptr, 0, 0, 0 };
         fields[fi++] = { s_snLabels[i], s_draft.printers[i].serial,
-                         sizeof(s_draft.printers[i].serial), FieldType::TEXT,     nullptr, 0, 0 };
+                         sizeof(s_draft.printers[i].serial), FieldType::TEXT,     nullptr, 0, 0, 0 };
         fields[fi++] = { s_cdLabels[i], s_draft.printers[i].code,
-                         sizeof(s_draft.printers[i].code),   FieldType::PASSWORD, nullptr, 0, 0 };
+                         sizeof(s_draft.printers[i].code),   FieldType::PASSWORD, nullptr, 0, 0, 0 };
     }
+
+    // SD card import/export buttons
+    fields[fi++] = { "Import from SD", nullptr, 0, FieldType::BUTTON, nullptr, 0, 0, 1 };
+    fields[fi++] = { "Export to SD",   nullptr, 0, FieldType::BUTTON, nullptr, 0, 0, 2 };
 
     s_fieldCount = fi;
 
-    // Clamp cursor to valid range after rebuild
     if (s_fieldIdx >= s_fieldCount) {
         s_fieldIdx = s_fieldCount - 1;
         s_scrollOff = max(0, s_fieldIdx - VISIBLE_FIELDS + 1);
@@ -81,7 +84,6 @@ void ScreenSettings::onEnter() {
 // ── draw ──────────────────────────────────────────────────────────────────────
 
 void ScreenSettings::draw(LGFX_Sprite& s) {
-    // Cursor blink
     if (millis() - s_cursorBlink > 500) {
         s_cursorBlink = millis();
         s_cursorOn    = !s_cursorOn;
@@ -104,39 +106,45 @@ void ScreenSettings::draw(LGFX_Sprite& s) {
 
         s.fillRect(0, y, DISP_W, ROW_H - 1, bg);
 
-        s.setTextColor(labelCol, bg);
-        s.drawString(f.label, 4, y + 3);
-
-        if (f.type == FieldType::SPINNER) {
-            char spinBuf[16];
-            if (isActive)
-                snprintf(spinBuf, sizeof(spinBuf), "< %d >", (int)(*f.spinnerVal));
-            else
-                snprintf(spinBuf, sizeof(spinBuf), "%d", (int)(*f.spinnerVal));
-            s.setTextColor(isActive ? TFT_WHITE : s.color565(180, 180, 180), bg);
-            s.drawString(spinBuf, 80, y + 3);
+        if (f.type == FieldType::BUTTON) {
+            uint16_t btnCol = isActive ? s.color565(0, 200, 120) : s.color565(80, 160, 100);
+            s.setTextColor(btnCol, bg);
+            char btnLabel[32];
+            snprintf(btnLabel, sizeof(btnLabel), isActive ? "> %s <" : "  %s  ", f.label);
+            s.drawString(btnLabel, 4, y + 3);
         } else {
-            // Build display value (mask passwords)
-            char display[68];
-            size_t vlen = strlen(f.buf);
-            if (f.type == FieldType::PASSWORD && !isActive) {
-                memset(display, '*', vlen);
-                display[vlen] = '\0';
+            s.setTextColor(labelCol, bg);
+            s.drawString(f.label, 4, y + 3);
+
+            if (f.type == FieldType::SPINNER) {
+                char spinBuf[16];
+                if (isActive)
+                    snprintf(spinBuf, sizeof(spinBuf), "< %d >", (int)(*f.spinnerVal));
+                else
+                    snprintf(spinBuf, sizeof(spinBuf), "%d", (int)(*f.spinnerVal));
+                s.setTextColor(isActive ? TFT_WHITE : s.color565(180, 180, 180), bg);
+                s.drawString(spinBuf, 80, y + 3);
             } else {
-                strlcpy(display, f.buf, sizeof(display));
-            }
-            // Append blinking cursor on active text field
-            if (isActive && s_cursorOn) {
-                size_t dlen = strlen(display);
-                if (dlen < sizeof(display) - 1) {
-                    display[dlen]     = '_';
-                    display[dlen + 1] = '\0';
+                char display[68];
+                size_t vlen = strlen(f.buf);
+                if (f.type == FieldType::PASSWORD && !isActive) {
+                    memset(display, '*', vlen);
+                    display[vlen] = '\0';
+                } else {
+                    strlcpy(display, f.buf, sizeof(display));
                 }
+                if (isActive && s_cursorOn) {
+                    size_t dlen = strlen(display);
+                    if (dlen < sizeof(display) - 1) {
+                        display[dlen]     = '_';
+                        display[dlen + 1] = '\0';
+                    }
+                }
+                char truncated[28];
+                truncateFilename(display, truncated, 26);
+                s.setTextColor(isActive ? TFT_WHITE : s.color565(180, 180, 180), bg);
+                s.drawString(truncated, 80, y + 3);
             }
-            char truncated[28];
-            truncateFilename(display, truncated, 26);
-            s.setTextColor(isActive ? TFT_WHITE : s.color565(180, 180, 180), bg);
-            s.drawString(truncated, 80, y + 3);
         }
 
         y += ROW_H;
@@ -151,7 +159,6 @@ void ScreenSettings::draw(LGFX_Sprite& s) {
         s.fillRect(DISP_W - 3, thumbY, 2, thumbH, s.color565(130, 130, 130));
     }
 
-    // Save hint at bottom
     s.setFont(&fonts::Font0);
     s.setTextColor(s.color565(0, 200, 80), TFT_BLACK);
     s.drawString("* = save & reboot", 4, CONTENT_H - 12);
@@ -164,7 +171,7 @@ void ScreenSettings::handleKey(char c, bool /*fn*/, bool enter, bool /*del*/,
     if (s_fieldIdx >= s_fieldCount) return;
     Field& f = fields[s_fieldIdx];
 
-    // Save shortcut: '*' from anywhere
+    // Save shortcut
     if (c == '*') {
         memcpy(&Settings::instance().data, &s_draft, sizeof(AppSettings));
         Settings::instance().save();
@@ -189,17 +196,37 @@ void ScreenSettings::handleKey(char c, bool /*fn*/, bool enter, bool /*del*/,
             }
             return;
         }
-        // Treat Enter/Tab as field advance on spinner
     }
 
-    // Text field: backspace
-    if (f.type != FieldType::SPINNER && (backspace || c == '\x08')) {
-        size_t len = strlen(f.buf);
-        if (len > 0) f.buf[len - 1] = '\0';
+    // Button handling — Enter activates the button
+    if (f.type == FieldType::BUTTON && enter) {
+        if (f.buttonId == 1) {
+            bool ok = Settings::instance().importFromSd();
+            if (ok) {
+                memcpy(&s_draft, &Settings::instance().data, sizeof(AppSettings));
+                buildFields();
+                UIManager::instance().showHint("Imported from SD!", 2000);
+            } else {
+                UIManager::instance().showHint("No config on SD card", 2000);
+            }
+        } else if (f.buttonId == 2) {
+            memcpy(&Settings::instance().data, &s_draft, sizeof(AppSettings));
+            bool ok = Settings::instance().exportToSd();
+            UIManager::instance().showHint(ok ? "Exported to SD!" : "SD write failed", 2000);
+        }
         return;
     }
 
-    // Navigate: Tab or down arrow → next field
+    // Text field: backspace
+    if (f.type == FieldType::TEXT || f.type == FieldType::PASSWORD) {
+        if (backspace || c == '\x08') {
+            size_t len = strlen(f.buf);
+            if (len > 0) f.buf[len - 1] = '\0';
+            return;
+        }
+    }
+
+    // Navigate: Tab or down arrow
     if (tab || c == '\x12') {
         if (s_fieldIdx < s_fieldCount - 1) {
             s_fieldIdx++;
@@ -212,7 +239,7 @@ void ScreenSettings::handleKey(char c, bool /*fn*/, bool enter, bool /*del*/,
         return;
     }
 
-    // Navigate: up arrow → previous field
+    // Navigate: up arrow
     if (c == '\x11') {
         if (s_fieldIdx > 0) {
             s_fieldIdx--;
@@ -221,23 +248,19 @@ void ScreenSettings::handleKey(char c, bool /*fn*/, bool enter, bool /*del*/,
         return;
     }
 
-    // Enter: advance field, or save on last
+    // Enter: advance field
     if (enter) {
         if (s_fieldIdx < s_fieldCount - 1) {
             s_fieldIdx++;
             if (s_fieldIdx >= s_scrollOff + VISIBLE_FIELDS)
                 s_scrollOff = s_fieldIdx - VISIBLE_FIELDS + 1;
-        } else {
-            memcpy(&Settings::instance().data, &s_draft, sizeof(AppSettings));
-            Settings::instance().save();
-            delay(200);
-            ESP.restart();
         }
         return;
     }
 
     // Printable character → append to text/password field
-    if (f.type != FieldType::SPINNER && c >= 0x20 && c < 0x7F) {
+    if ((f.type == FieldType::TEXT || f.type == FieldType::PASSWORD)
+        && c >= 0x20 && c < 0x7F) {
         size_t len = strlen(f.buf);
         if (len < f.maxLen - 1) {
             f.buf[len]     = c;

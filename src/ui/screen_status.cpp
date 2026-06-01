@@ -116,5 +116,5 @@ void ScreenStatus::draw(LGFX_Sprite& s, const PrinterState& st) {
 void ScreenStatus::handleKey(char /*c*/, bool /*fn*/, bool /*enter*/, bool /*del*/) {}
 
 const char* ScreenStatus::hintText() {
-    return ", . tabs  MQTT live";
+    return "fn+,. tabs  MQTT live";
 }

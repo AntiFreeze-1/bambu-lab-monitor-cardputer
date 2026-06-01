@@ -21,10 +21,6 @@ void truncateFilename(const char* src, char* dst, uint8_t maxChars) {
     if (slen <= maxChars) {
         strlcpy(dst, src, maxChars + 1);
     } else {
-        strncpy(dst, src, maxChars - 1);
-        dst[maxChars - 1] = '\xE2'; // UTF-8 ellipsis approximation
-        dst[maxChars]     = '\0';
-        // Simpler ASCII fallback:
         strncpy(dst, src, maxChars - 3);
         dst[maxChars - 3] = '.';
         dst[maxChars - 2] = '.';

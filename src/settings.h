@@ -3,7 +3,6 @@
 #include "config.h"
 
 struct PrinterCfg {
-    // name removed — auto-detected from MQTT (stored in PrinterState.deviceModel)
     char ip[16];
     char serial[20];
     char code[16];
@@ -12,7 +11,7 @@ struct PrinterCfg {
 struct AppSettings {
     char       wifiSsid[64];
     char       wifiPass[64];
-    uint8_t    printerCount;                    // 1–99
+    uint8_t    printerCount;
     PrinterCfg printers[PRINTER_COUNT_MAX];
 };
 
@@ -23,6 +22,9 @@ public:
     void load();
     void save();
     bool isConfigured() const;
+
+    bool importFromSd();
+    bool exportToSd();
 
     AppSettings data;
 
